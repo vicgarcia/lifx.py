@@ -5,13 +5,6 @@
 #     "lifxlan>=1.2.0",
 # ]
 # ///
-"""
-LIFX - Single bulb control for LIFX smart lights.
-
-A dead simple CLI for controlling individual LIFX bulbs on your network.
-No scenes, no complexity - just direct bulb control.
-Compose complex behaviors by calling this script multiple times.
-"""
 
 import sys
 import argparse
@@ -34,8 +27,8 @@ Compose complex behaviors by chaining calls:
 """
 
 
-class LifxController:
-    """Simple LIFX controller for individual bulb operations."""
+class LifxClient:
+    """Simple LIFX client for individual bulb operations."""
 
     def __init__(self, num_lights: Optional[int] = None):
         self.lan = LifxLAN(num_lights)
@@ -132,8 +125,8 @@ class LifxController:
 
 def cmd_list(args):
     """List all LIFX lights on the network."""
-    controller = LifxController(args.num_lights)
-    lights = controller.list_lights()
+    client = LifxClient(args.num_lights)
+    lights = client.list_lights()
 
     if not lights:
         print("No LIFX lights found on network")
@@ -166,29 +159,29 @@ def cmd_list(args):
 
 def cmd_rename(args):
     """Rename a light."""
-    controller = LifxController()
-    light = controller.find_light(mac=args.mac, ip=args.ip, label=args.label)
+    client = LifxClient()
+    light = client.find_light(mac=args.mac, ip=args.ip, label=args.label)
 
     if not light:
         print(f"Light not found")
         return 1
 
     old_label = light.get_label()
-    controller.set_label(light, args.name)
+    client.set_label(light, args.name)
     print(f"Light renamed from '{old_label}' to '{args.name}'")
     return 0
 
 
 def cmd_on(args):
     """Turn on a light."""
-    controller = LifxController()
-    light = controller.find_light(mac=args.mac, ip=args.ip, label=args.label)
+    client = LifxClient()
+    light = client.find_light(mac=args.mac, ip=args.ip, label=args.label)
 
     if not light:
         print(f"Light not found")
         return 1
 
-    controller.set_power(light, True, duration=args.duration)
+    client.set_power(light, True, duration=args.duration)
     label = light.get_label() if hasattr(light, 'get_label') else 'Light'
     print(f"{label} turned on")
     return 0
@@ -196,14 +189,14 @@ def cmd_on(args):
 
 def cmd_off(args):
     """Turn off a light."""
-    controller = LifxController()
-    light = controller.find_light(mac=args.mac, ip=args.ip, label=args.label)
+    client = LifxClient()
+    light = client.find_light(mac=args.mac, ip=args.ip, label=args.label)
 
     if not light:
         print(f"Light not found")
         return 1
 
-    controller.set_power(light, False, duration=args.duration)
+    client.set_power(light, False, duration=args.duration)
     label = light.get_label() if hasattr(light, 'get_label') else 'Light'
     print(f"{label} turned off")
     return 0
@@ -211,8 +204,8 @@ def cmd_off(args):
 
 def cmd_set(args):
     """Set light color/brightness properties."""
-    controller = LifxController()
-    light = controller.find_light(mac=args.mac, ip=args.ip, label=args.label)
+    client = LifxClient()
+    light = client.find_light(mac=args.mac, ip=args.ip, label=args.label)
 
     if not light:
         print(f"Light not found")
@@ -248,7 +241,7 @@ def cmd_set(args):
             k = args.kelvin
             changes.append(f"kelvin={args.kelvin}")
 
-        controller.set_color(light, h, s, b, k, duration=args.duration)
+        client.set_color(light, h, s, b, k, duration=args.duration)
     except Exception as e:
         print(f"Failed to set color: {e}")
         return 1
