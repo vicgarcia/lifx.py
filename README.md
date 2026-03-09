@@ -2,106 +2,109 @@
 
 A simple CLI for controlling LIFX smart bulbs on your local network.
 
+## Features
+
+- **Single-file executable** - Uses `uv run --script` with inline dependencies (PEP 723)
+- **Local network control** - Direct LAN protocol, no cloud or API keys required
+- **Device discovery** - Find all LIFX bulbs on your network
+- **Power control** - Turn lights on/off with optional transitions
+- **Color control** - Set hue, saturation, brightness, and color temperature (HSBK)
+- **Device management** - Rename lights directly from CLI
+
+## Prerequisites
+
+- Python 3.10+
+- [uv](https://github.com/astral-sh/uv) package manager
+- LIFX bulbs on your local network
+
 ## Installation
 
-### Prerequisites
-
-Install [uv](https://docs.astral.sh/uv/) (Python package manager):
-
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Clone and make executable
+git clone https://github.com/vicgarcia/lifx.py.git
+cd lifx.py
+chmod +x lifx.py
+
+# Run
+./lifx.py --help
+
+# Install
+cp lifx.py ~/.local/bin
+chmod +x ~/.local/bin/lifx.py
 ```
 
-### User Install (Recommended)
+## Commands
 
-Install to `~/.local/bin` (doesn't require sudo):
-
-```bash
-# Download and install
-mkdir -p ~/.local/bin
-curl -fsSL https://raw.githubusercontent.com/vicgarcia/lifx.py/main/lifx -o ~/.local/bin/lifx
-chmod +x ~/.local/bin/lifx
-
-# Ensure ~/.local/bin is in your PATH (most distros already have this)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-Verify installation:
-
-```bash
-lifx --help
-```
-
-### System-Wide Install (Alternative)
-
-Install to `/usr/local/bin` (requires sudo, available to all users):
-
-```bash
-# Download and install
-sudo curl -fsSL https://raw.githubusercontent.com/vicgarcia/lifx.py/main/lifx -o /usr/local/bin/lifx
-sudo chmod +x /usr/local/bin/lifx
-```
-
-Verify installation:
-
-```bash
-lifx --help
-```
+| Command | Description |
+|---------|-------------|
+| `list` | Discover and list all LIFX bulbs on network |
+| `on` | Turn on a light (by label, IP, or MAC) |
+| `off` | Turn off a light (by label, IP, or MAC) |
+| `set` | Set color/brightness properties (HSBK) |
+| `rename` | Rename a light |
 
 ## Usage
 
-### List All Lights
-
-Discover all LIFX bulbs on your network:
-
+### List lights
 ```bash
-lifx list
+lifx.py list
 ```
 
-Output shows: NAME, IP, MAC, MODEL, POWER, COLOR (HSBK values)
-
-### Power Control
-
+### Power control
 ```bash
-# Turn on by name
-lifx on --label "Office"
-
-# Turn off by IP
-lifx off --ip 192.168.1.100
-
-# Turn on by MAC
-lifx on --mac d0:73:d5:xx:xx:xx
-
-# With transition duration (milliseconds)
-lifx on --label "Bedroom" --duration 1000
+lifx.py on --label "Office"
+lifx.py off --label "Bedroom"
+lifx.py on --label "Bedroom" --duration 1000  # with transition
 ```
 
-### Set Color and Brightness
-
-LIFX uses HSBK (Hue, Saturation, Brightness, Kelvin) with 16-bit values:
-
+### Set color/brightness
 ```bash
-# Set brightness only (50% = 32768/65535)
-lifx set --label "Desk" --brightness 32768
+# Brightness only
+lifx.py set --label "Desk" --brightness 32768
 
-# Set hue only (keeps other properties)
-lifx set --label "Desk" --hue 21845
-
-# Set full color
-lifx set --label "Desk" --hue 43690 --saturation 65535 --brightness 52428 --kelvin 4000
-
-# With transition
-lifx set --label "Office" --brightness 65535 --duration 2000
+# Full HSBK color
+lifx.py set --label "Desk" --hue 43690 --saturation 65535 --brightness 52428 --kelvin 4000
 ```
 
-### Rename Lights
-
+### Rename lights
 ```bash
-lifx rename --label "Old Name" "New Name"
+lifx.py rename --label "Old Name" "New Name"
 ```
 
-### HSBK Color Model
+### Composing behaviors
+```bash
+# Turn on and set to warm dim
+lifx.py on --label "Bedroom" && \
+lifx.py set --label "Bedroom" --brightness 6554 --saturation 0 --kelvin 2700
+
+# Set multiple lights
+for light in "Office" "Desk" "Hallway"; do
+  lifx.py set --label "$light" --brightness 32768
+done
+```
+
+## Set Command Options
+
+Set any combination of HSBK properties; unspecified values are preserved from current state.
+
+```bash
+lifx.py set --label "Desk" --hue 43690 --saturation 65535 --brightness 52428 --kelvin 4000 --duration 1000
+```
+
+| Option | Description |
+|--------|-------------|
+| `--label`, `-l` | Light name (case-insensitive) |
+| `--ip`, `-i` | Light IP address |
+| `--mac`, `-m` | Light MAC address |
+| `--hue` | Hue (0-65535) |
+| `--saturation`, `-s` | Saturation (0-65535) |
+| `--brightness`, `-b` | Brightness (0-65535) |
+| `--kelvin`, `-k` | Color temperature (2500-9000) |
+| `--duration`, `-d` | Transition time in milliseconds |
+
+## HSBK Color Model
+
+LIFX uses 16-bit values (0-65535) for color properties:
 
 | Property | Range | Description |
 |----------|-------|-------------|
@@ -110,7 +113,7 @@ lifx rename --label "Old Name" "New Name"
 | **Brightness** | 0-65535 | Light intensity. 0=off, 65535=full brightness |
 | **Kelvin** | 2500-9000 | Color temperature. Only visible at low saturation. 2500=warm, 9000=cool |
 
-### Common Colors
+## Common Colors
 
 | Color | Hue |
 |-------|-----|
@@ -125,7 +128,7 @@ lifx rename --label "Old Name" "New Name"
 
 For white light, set saturation to 0 and control warmth with kelvin (2500-3000 = warm white, 5000-6500 = cool white).
 
-### Brightness Levels
+## Brightness Levels
 
 | Percentage | Raw Value |
 |------------|-----------|
@@ -136,29 +139,29 @@ For white light, set saturation to 0 and control warmth with kelvin (2500-3000 =
 | 10% | 6554 |
 | 1% | 655 |
 
-### Composing Complex Behaviors
+## Agent Skill
 
-Chain multiple commands for complex operations:
+This project includes a `SKILL.md` file for use with AI coding agents (Claude Code, etc.). The skill enables natural language control of your lights.
+
+### Installation
 
 ```bash
-# Turn on and set to warm dim
-lifx on --label "Bedroom" && \
-lifx set --label "Bedroom" --brightness 6554 --saturation 0 --kelvin 2700
+# Create skills directory
+mkdir -p /path/to/agent/skills
 
-# Set multiple lights
-for light in "Office" "Desk" "Hallway"; do
-  lifx set --label "$light" --brightness 32768
-done
+# Copy SKILL.md
+cp /path/to/lifx.py/SKILL.md /path/to/agent/skills/lifx/SKILL.md
 
-# Morning routine
-lifx on --label "Bedroom" --duration 5000 && \
-sleep 1 && \
-lifx set --label "Bedroom" --brightness 32768 --saturation 0 --kelvin 4000 --duration 30000
+# Ensure lifx.py is in PATH (see installation above)
 ```
 
-### How It Works
+### Usage with Claude Code
 
-- Uses [lifxlan](https://github.com/mclarkk/lifxlan) library for direct LAN protocol communication
-- Runs via `uv` with inline script dependencies (PEP 723)
-- First run takes ~3 seconds to set up dependencies, subsequent runs are instant
-- Works on a network where your LIFX bulbs are accessible
+Add the skills directory to your agent configuration, then interact naturally:
+
+> "Turn on the office light"
+> "Set the bedroom to a warm dim glow"
+> "Make the living room blue at 50% brightness"
+> "Turn off all the lights with a slow fade"
+
+The agent reads `SKILL.md` to understand available commands, HSBK color values, and how to compose operations.
