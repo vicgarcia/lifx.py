@@ -1,5 +1,5 @@
 ---
-name: lifx
+name: lifx.py
 description: Control LIFX smart bulbs on the local network. Use when the user wants to control lights, change colors, adjust brightness, or manage smart lighting. Supports discovery, power control, and HSBK color settings via direct LAN protocol.
 compatibility: Requires 'lifx.py' script in PATH on a network with LIFX bulbs.
 ---

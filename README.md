@@ -150,7 +150,7 @@ This project includes a `SKILL.md` file for use with AI coding agents (Claude Co
 mkdir -p /path/to/agent/skills
 
 # Copy SKILL.md
-cp /path/to/lifx.py/SKILL.md /path/to/agent/skills/lifx/SKILL.md
+cp /path/to/lifx.py/SKILL.md /path/to/agent/skills/lifx.py/SKILL.md
 
 # Ensure lifx.py is in PATH (see installation above)
 ```
