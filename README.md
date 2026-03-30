@@ -19,19 +19,26 @@ A simple CLI for controlling LIFX smart bulbs on your local network.
 
 ## Installation
 
+### Install for uv
+
 ```bash
 # Clone and make executable
-git clone https://github.com/vicgarcia/lifx.py.git
-cd lifx.py
-chmod +x lifx.py
+git clone https://github.com/vicgarcia/lifx.py
 
-# Run
-./lifx.py --help
+# Run directly (dependencies auto-installed)
+uv run --script scripts/lifx.py list
 
-# Install
-cp lifx.py ~/.local/bin
+# Install in PATH
+cp scripts/lifx.py ~/.local/bin/lifx.py
 chmod +x ~/.local/bin/lifx.py
+lifx.py list
 ```
+
+### Install for Claude deskto
+
+Download `lifx-v*.zip` from [Releases](https://github.com/vicgarcia/lifx.py/releases).
+
+Install this in Claude Desktop as a skill.
 
 ## Commands
 
@@ -141,18 +148,21 @@ For white light, set saturation to 0 and control warmth with kelvin (2500-3000 =
 
 ## Agent Skill
 
-This project includes a `SKILL.md` file for use with AI coding agents (Claude Code, etc.). The skill enables natural language control of your lights.
+This project includes a `SKILL.md` file for use with AI coding agents (Claude Code, Cursor, etc.).
 
 ### Installation
 
 ```bash
 # Create skills directory
-mkdir -p /path/to/agent/skills
+mkdir -p /path/to/agent/skills/lifx
 
-# Copy SKILL.md
-cp /path/to/lifx.py/SKILL.md /path/to/agent/skills/lifx.py/SKILL.md
+# Copy skill files
+cp SKILL.md /path/to/agent/skills/lifx/
+cp -r scripts/ /path/to/agent/skills/lifx/
 
-# Ensure lifx.py is in PATH (see installation above)
+# Ensure lifx.py is in PATH
+cp scripts/lifx.py ~/.local/bin/
+chmod +x ~/.local/bin/lifx.py
 ```
 
 ### Usage with Claude Code
