@@ -10,7 +10,7 @@ import sys
 import time
 import argparse
 from typing import Optional
-from lifxlan import LifxLAN
+from lifxlan import LifxLAN, Light, GetService, StateService
 
 
 CLI_EPILOG = """
@@ -46,9 +46,18 @@ class LifxClient:
         self._lights_cache = None
 
     def _get_lights(self):
-        """Get all lights, using cache if available."""
+        """Get all lights, using cache if available.
+
+        Lights are built straight from the discovery broadcast. lifxlan's get_lights()
+        also asks every device for its product version, and one unanswered request
+        there aborts the whole discovery.
+        """
         if self._lights_cache is None:
-            self._lights_cache = self.lan.get_lights()
+            responses = self.lan.broadcast_with_resp(GetService, StateService)
+            self._lights_cache = [
+                Light(r.target_addr, r.ip_addr, r.service, r.port, self.lan.source_id)
+                for r in responses
+            ]
         return self._lights_cache
 
     def rediscover(self):
