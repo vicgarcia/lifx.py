@@ -32,6 +32,9 @@ lifx.py on --mac d0:73:d5:xx:xx:xx
 # With transition duration (milliseconds)
 lifx.py on --label "Bedroom" --duration 2000   # 2 second fade in
 lifx.py off --label "Bedroom" --duration 5000  # 5 second fade out
+
+# Several lights in one command (repeat --label/--mac/--ip)
+lifx.py off --label "Office" --label "Desk"
 ```
 
 ### Set Color/Brightness
@@ -47,7 +50,22 @@ lifx.py set --label "Desk" --hue 43690 --saturation 65535 --brightness 52428 --k
 
 # With transition
 lifx.py set --label "Office" --brightness 65535 --duration 2000
+
+# Turn on if off and set color in one step (fades up straight into the color)
+lifx.py set --label "Office" --saturation 0 --brightness 32768 --kelvin 2700 --duration 2000 --on
 ```
+
+`set` never changes power unless `--on` is given: an off light stays off and keeps the new
+color for when it is next turned on. Use `--on` when the user wants the light lit.
+
+### Verified Changes
+```bash
+lifx.py set --label "Office" --label "Desk" --brightness 16384 --verify
+lifx.py on --label "Office" --verify --attempts 5
+```
+`--verify` (on `set`, `on`, `off`) rediscovers missing lights, reads each light's state back
+after the transition, and resends until it matches, up to `--attempts` (default 3). Exit code
+is non-zero if any light is still wrong. Use it whenever the result must be correct.
 
 ### Rename Lights
 ```bash
@@ -109,8 +127,7 @@ lifx.py set --label "Office" --saturation 0 --brightness 65535 --kelvin 4000
 
 ### Morning Wake-Up (Gradual Bright Cool Light)
 ```bash
-lifx.py on --label "Bedroom" --duration 5000
-lifx.py set --label "Bedroom" --brightness 65535 --saturation 0 --kelvin 5000 --duration 30000
+lifx.py set --label "Bedroom" --brightness 65535 --saturation 0 --kelvin 5000 --duration 30000 --on
 ```
 
 ### Evening Relax (Dim Warm Light)
@@ -130,16 +147,12 @@ lifx.py set --label "Party" --hue 54613 --saturation 65535 --brightness 65535
 
 ### All Lights Off
 ```bash
-for light in "Office" "Bedroom" "Kitchen"; do
-  lifx.py off --label "$light" --duration 1000
-done
+lifx.py off --label "Office" --label "Bedroom" --label "Kitchen" --duration 1000 --verify
 ```
 
 ### Set Multiple Lights to Same Color
 ```bash
-for light in "Office" "Desk" "Hallway"; do
-  lifx.py set --label "$light" --brightness 32768 --saturation 0 --kelvin 4000
-done
+lifx.py set --label "Office" --label "Desk" --label "Hallway" --brightness 32768 --saturation 0 --kelvin 4000
 ```
 
 ## Tips
@@ -148,6 +161,8 @@ done
 - Label matching is case-insensitive ("Office" = "office" = "OFFICE")
 - Set `--duration` for smooth transitions instead of instant changes
 - For white light: set saturation to 0, control warmth with kelvin
-- Chain commands with `&&` for multi-step operations
+- Repeat `--label` to act on several lights with a single discovery
+- `set` without `--on` leaves power alone; add `--on` to light it up
+- Add `--verify` when the change must stick (scheduled jobs, flaky Wi-Fi)
 - The `--brightness` flag alone preserves current hue/saturation
 - First run may take ~3 seconds for uv to install dependencies

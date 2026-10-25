@@ -9,6 +9,8 @@ A simple CLI for controlling LIFX smart bulbs on your local network.
 - **Device discovery** - Find all LIFX bulbs on your network
 - **Power control** - Turn lights on/off with optional transitions
 - **Color control** - Set hue, saturation, brightness, and color temperature (HSBK)
+- **Multiple lights per command** - Repeat `--label`/`--mac`/`--ip`; one discovery, lights handled one at a time
+- **Verified changes** - `--verify` reads state back and retries until the bulbs report what was asked for
 - **Device management** - Rename lights directly from CLI
 
 ## Prerequisites
@@ -38,9 +40,9 @@ chmod +x ~/.local/bin/lifx.py
 | Command | Description |
 |---------|-------------|
 | `list` | Discover and list all LIFX bulbs on network |
-| `on` | Turn on a light (by label, IP, or MAC) |
-| `off` | Turn off a light (by label, IP, or MAC) |
-| `set` | Set color/brightness properties (HSBK) |
+| `on` | Turn on lights (by label, IP, or MAC) |
+| `off` | Turn off lights (by label, IP, or MAC) |
+| `set` | Set color/brightness properties (HSBK), optionally turning lights on |
 | `rename` | Rename a light |
 
 ## Usage
@@ -55,6 +57,7 @@ lifx.py list
 lifx.py on --label "Office"
 lifx.py off --label "Bedroom"
 lifx.py on --label "Bedroom" --duration 1000  # with transition
+lifx.py off --label "Office" --label "Desk"   # several lights
 ```
 
 ### Set color/brightness
@@ -64,7 +67,31 @@ lifx.py set --label "Desk" --brightness 32768
 
 # Full HSBK color
 lifx.py set --label "Desk" --hue 43690 --saturation 65535 --brightness 52428 --kelvin 4000
+
+# Turn on if off, fading up straight into the new color
+lifx.py set --label "Desk" --saturation 0 --brightness 32768 --kelvin 2700 --duration 2000 --on
 ```
+
+`set` never changes power unless `--on` is given. A light that is off stays off and keeps the
+new color for the next time it is turned on - so a scheduled dim won't turn back on a light
+someone switched off by hand. With `--on`, a light that is off has its color set first and is
+then powered on with the transition, so it never flashes its previous color.
+
+### Verified changes
+```bash
+lifx.py set --label "Office" --label "Desk" --brightness 16384 --duration 2000 --verify
+lifx.py off --label "Office" --verify --attempts 5
+```
+
+`--verify` makes each change fault tolerant:
+
+- Lights missing from discovery are searched for again, up to `--attempts` times
+- After the transition finishes, each light's state is read back and compared to what was requested
+  (within ~1% for hue/saturation/brightness; kelvin may be clamped to the bulb's supported range)
+- A light that doesn't match gets the command again, up to `--attempts` times (default 3)
+- The exit code is non-zero if any light is still wrong, and each failed attempt is logged to stderr
+
+Without `--verify` each command is sent once, and success means the bulb acknowledged it.
 
 ### Rename lights
 ```bash
@@ -74,13 +101,14 @@ lifx.py rename --label "Old Name" "New Name"
 ### Composing behaviors
 ```bash
 # Turn on and set to warm dim
-lifx.py on --label "Bedroom" && \
-lifx.py set --label "Bedroom" --brightness 6554 --saturation 0 --kelvin 2700
+lifx.py set --label "Bedroom" --brightness 6554 --saturation 0 --kelvin 2700 --on
 
-# Set multiple lights
-for light in "Office" "Desk" "Hallway"; do
-  lifx.py set --label "$light" --brightness 32768
-done
+# Set multiple lights to the same values
+lifx.py set --label "Office" --label "Desk" --label "Hallway" --brightness 32768
+
+# Different values per light
+lifx.py set --label "Office" --brightness 32768 --verify; \
+lifx.py set --label "Desk" --brightness 16384 --verify
 ```
 
 ## Set Command Options
@@ -93,14 +121,17 @@ lifx.py set --label "Desk" --hue 43690 --saturation 65535 --brightness 52428 --k
 
 | Option | Description |
 |--------|-------------|
-| `--label`, `-l` | Light name (case-insensitive) |
-| `--ip`, `-i` | Light IP address |
-| `--mac`, `-m` | Light MAC address |
+| `--label`, `-l` | Light name (case-insensitive), repeatable |
+| `--ip`, `-i` | Light IP address, repeatable |
+| `--mac`, `-m` | Light MAC address, repeatable |
 | `--hue` | Hue (0-65535) |
 | `--saturation`, `-s` | Saturation (0-65535) |
 | `--brightness`, `-b` | Brightness (0-65535) |
 | `--kelvin`, `-k` | Color temperature (2500-9000) |
 | `--duration`, `-d` | Transition time in milliseconds |
+| `--on` | Turn the light on if it is off (default: never change power) |
+| `--verify` | Read state back and retry until it matches (also on `on`/`off`) |
+| `--attempts` | Attempts for discovery and the change with `--verify` (default: 3) |
 
 ## HSBK Color Model
 
