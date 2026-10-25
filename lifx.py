@@ -224,30 +224,47 @@ def hsbk_mismatches(light, requested: tuple, actual: tuple) -> list[str]:
     return problems
 
 
-def run_attempts(name: str, apply, check, settle: float, attempts: int) -> bool:
-    """Apply a change, and when check is given, read back and retry until it holds.
+def apply_all(found, apply, check, settle: float, attempts: int) -> set:
+    """Send a change to every light, and when check is given, read back and retry the misses.
 
-    apply() sends the command; check() reads the bulb and returns a list of problems.
-    Without check there is a single attempt and success means the bulb acknowledged.
+    apply(light) sends the command; check(light) reads the bulb and returns a list of problems.
+    Every light gets the command before the wait, so transitions run together rather than
+    one after another. Without check there is a single attempt and success means the bulb
+    acknowledged. Returns the targets that failed.
     """
+    pending = list(found)
+
     for attempt in range(1, attempts + 1):
-        try:
-            apply()
-            if check is None:
-                return True
+        problems = {}
+        sent = []
+
+        for target, light in pending:
+            try:
+                apply(light)
+                sent.append((target, light))
+            except Exception as e:
+                problems[target] = [str(e)]
+
+        if check is not None and sent:
             time.sleep(settle)
-            problems = check()
-        except Exception as e:
-            problems = [str(e)]
+            for target, light in sent:
+                try:
+                    issues = check(light)
+                except Exception as e:
+                    issues = [str(e)]
+                if issues:
+                    problems[target] = issues
 
-        if not problems:
-            return True
+        pending = [(t, l) for t, l in pending if t in problems]
+        for target, light in pending:
+            print(f"{light_name(light, target)}: attempt {attempt}/{attempts} failed: {'; '.join(problems[target])}", file=sys.stderr)
 
-        print(f"{name}: attempt {attempt}/{attempts} failed: {'; '.join(problems)}", file=sys.stderr)
+        if check is None or not pending:
+            break
         if attempt < attempts:
             time.sleep(attempt)
 
-    return False
+    return {t for t, _ in pending}
 
 
 def resolve_targets(client, args):
@@ -325,21 +342,22 @@ def power_command(args, on: bool):
     settle = args.duration / 1000 + SETTLE_SECONDS
     state = 'on' if on else 'off'
 
+    def apply(light):
+        client.set_power(light, on, duration=args.duration)
+
+    def check(light):
+        power, _ = client.get_state(light)
+        return [] if (power > 0) == on else [f"power is {'on' if power > 0 else 'off'}"]
+
+    failures = apply_all(found, apply, check if args.verify else None, settle, attempts)
+
     for target, light in found:
         name = light_name(light, target)
-
-        def apply():
-            client.set_power(light, on, duration=args.duration)
-
-        def check():
-            power, _ = client.get_state(light)
-            return [] if (power > 0) == on else [f"power is {'on' if power > 0 else 'off'}"]
-
-        if run_attempts(name, apply, check if args.verify else None, settle, attempts):
-            print(f"{name} turned {state}{' (verified)' if args.verify else ''}")
-        else:
+        if target in failures:
             print(f"{name}: failed to turn {state}")
             failed = True
+        else:
+            print(f"{name} turned {state}{' (verified)' if args.verify else ''}")
 
     return 1 if failed else 0
 
@@ -373,34 +391,35 @@ def cmd_set(args):
     if args.on:
         changes.append("on")
 
+    def apply(light):
+        # Override current color with provided values (raw LIFX values 0-65535)
+        power, current = client.get_state(light)
+        h, s, b, k = (new if new is not None else cur for new, cur in zip(requested, current))
+
+        if args.on and power == 0:
+            # set the color while still off, then fade up straight into it
+            client.set_color(light, h, s, b, k, duration=0)
+            client.set_power(light, True, duration=args.duration)
+        else:
+            # never touches power - an off bulb keeps the color for its next power on
+            client.set_color(light, h, s, b, k, duration=args.duration)
+
+    def check(light):
+        power, actual = client.get_state(light)
+        problems = hsbk_mismatches(light, requested, actual)
+        if args.on and power == 0:
+            problems.append("power is off")
+        return problems
+
+    failures = apply_all(found, apply, check if args.verify else None, settle, attempts)
+
     for target, light in found:
         name = light_name(light, target)
-
-        def apply():
-            # Override current color with provided values (raw LIFX values 0-65535)
-            power, current = client.get_state(light)
-            h, s, b, k = (new if new is not None else cur for new, cur in zip(requested, current))
-
-            if args.on and power == 0:
-                # set the color while still off, then fade up straight into it
-                client.set_color(light, h, s, b, k, duration=0)
-                client.set_power(light, True, duration=args.duration)
-            else:
-                # never touches power - an off bulb keeps the color for its next power on
-                client.set_color(light, h, s, b, k, duration=args.duration)
-
-        def check():
-            power, actual = client.get_state(light)
-            problems = hsbk_mismatches(light, requested, actual)
-            if args.on and power == 0:
-                problems.append("power is off")
-            return problems
-
-        if run_attempts(name, apply, check if args.verify else None, settle, attempts):
-            print(f"{name}: {', '.join(changes)}{' (verified)' if args.verify else ''}")
-        else:
+        if target in failures:
             print(f"{name}: failed to set {', '.join(changes)}")
             failed = True
+        else:
+            print(f"{name}: {', '.join(changes)}{' (verified)' if args.verify else ''}")
 
     return 1 if failed else 0
 

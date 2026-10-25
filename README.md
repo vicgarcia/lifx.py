@@ -9,7 +9,7 @@ A simple CLI for controlling LIFX smart bulbs on your local network.
 - **Device discovery** - Find all LIFX bulbs on your network
 - **Power control** - Turn lights on/off with optional transitions
 - **Color control** - Set hue, saturation, brightness, and color temperature (HSBK)
-- **Multiple lights per command** - Repeat `--label`/`--mac`/`--ip`; one discovery, lights handled one at a time
+- **Multiple lights per command** - Repeat `--label`/`--mac`/`--ip`; one discovery, transitions run together
 - **Verified changes** - `--verify` reads state back and retries until the bulbs report what was asked for
 - **Device management** - Rename lights directly from CLI
 
@@ -86,9 +86,9 @@ lifx.py off --label "Office" --verify --attempts 5
 `--verify` makes each change fault tolerant:
 
 - Lights missing from discovery are searched for again, up to `--attempts` times
-- After the transition finishes, each light's state is read back and compared to what was requested
+- Every light gets the command first, then after the transition finishes each light's state is read back and compared to what was requested
   (within ~1% for hue/saturation/brightness; kelvin may be clamped to the bulb's supported range)
-- A light that doesn't match gets the command again, up to `--attempts` times (default 3)
+- Only lights that don't match get the command again, up to `--attempts` times (default 3)
 - The exit code is non-zero if any light is still wrong, and each failed attempt is logged to stderr
 
 Without `--verify` each command is sent once, and success means the bulb acknowledged it.
