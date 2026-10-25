@@ -30,8 +30,8 @@ Compose complex behaviors by chaining calls:
 class LifxClient:
     """Simple LIFX client for individual bulb operations."""
 
-    def __init__(self, num_lights: Optional[int] = None):
-        self.lan = LifxLAN(num_lights)
+    def __init__(self):
+        self.lan = LifxLAN()
         self._lights_cache = None
 
     def _get_lights(self):
@@ -125,7 +125,7 @@ class LifxClient:
 
 def cmd_list(args):
     """List all LIFX lights on the network."""
-    client = LifxClient(args.num_lights)
+    client = LifxClient()
     lights = client.list_lights()
 
     if not lights:
@@ -256,8 +256,6 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=CLI_EPILOG
     )
-
-    parser.add_argument('--num-lights', '-n', type=int, help='Number of lights (speeds up discovery)')
 
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
 
