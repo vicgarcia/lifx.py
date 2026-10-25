@@ -1,0 +1,13 @@
+services:
+
+  cron:
+    build: .
+    image: lifx-cron:local
+    restart: unless-stopped
+    # LIFX discovery is a UDP broadcast on the LAN - needs the host network (Linux hosts only)
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      # bind the schedule so it can be edited without rebuilding the image
+      - ./crontab:/crontab:ro
