@@ -7,9 +7,10 @@
 # ///
 
 import sys
+import time
 import argparse
 from typing import Optional
-from lifxlan import LifxLAN
+from lifxlan import LifxLAN, Light, GetService, StateService
 
 
 CLI_EPILOG = """
@@ -22,23 +23,46 @@ Examples:
   lifx set --mac d0:73:xx --hue 43690 --saturation 65535 --brightness 52428 --kelvin 4000
   lifx rename --label "Old Name" "New Name"         # Rename a light
 
-Compose complex behaviors by chaining calls:
-  lifx on --label "Room1" && lifx set --label "Room1" --hue 21845 --saturation 65535 --brightness 45875
+Target several lights at once by repeating --label/--mac/--ip:
+  lifx off --label "Office" --label "Desk"
+
+Turn on (if off) and set color in one step, then confirm the bulbs took it:
+  lifx set --label "Office" --label "Desk" --saturation 0 --brightness 32768 --kelvin 2700 --on --verify
+
+Without --on, set never changes power: off bulbs stay off and take the new color for when they next turn on.
 """
+
+# verification tolerances
+HSB_TOLERANCE = 655         # ~1% of the 16-bit hue/saturation/brightness range
+KELVIN_TOLERANCE = 50
+SETTLE_SECONDS = 0.5        # extra wait after a transition before reading state back
 
 
 class LifxClient:
     """Simple LIFX client for individual bulb operations."""
 
-    def __init__(self, num_lights: Optional[int] = None):
-        self.lan = LifxLAN(num_lights)
+    def __init__(self):
+        self.lan = LifxLAN()
         self._lights_cache = None
 
     def _get_lights(self):
-        """Get all lights, using cache if available."""
+        """Get all lights, using cache if available.
+
+        Lights are built straight from the discovery broadcast. lifxlan's get_lights()
+        also asks every device for its product version, and one unanswered request
+        there aborts the whole discovery.
+        """
         if self._lights_cache is None:
-            self._lights_cache = self.lan.get_lights()
+            responses = self.lan.broadcast_with_resp(GetService, StateService)
+            self._lights_cache = [
+                Light(r.target_addr, r.ip_addr, r.service, r.port, self.lan.source_id)
+                for r in responses
+            ]
         return self._lights_cache
+
+    def rediscover(self):
+        """Drop the cached discovery so the next lookup broadcasts again."""
+        self._lights_cache = None
 
     def list_lights(self) -> list[dict]:
         """Discover and return info about all lights."""
@@ -100,12 +124,44 @@ class LifxClient:
             label_lower = label.lower()
             for light in lights:
                 try:
-                    if light.get_label().lower() == label_lower:
+                    # lifxlan keeps the label on the light once fetched
+                    if (light.label or light.get_label()).lower() == label_lower:
                         return light
                 except:
                     pass
 
         return None
+
+    def find_lights(self, targets: list[tuple[str, str]], attempts: int = 1):
+        """Resolve (kind, value) targets to lights, rediscovering until all are found.
+
+        Returns (found, missing): found is a list of (target, light) in target order.
+        """
+        found = {}
+
+        for attempt in range(1, attempts + 1):
+            for target in targets:
+                if target not in found:
+                    kind, value = target
+                    light = self.find_light(**{kind: value})
+                    if light:
+                        found[target] = light
+
+            missing = [t for t in targets if t not in found]
+            if not missing or attempt == attempts:
+                break
+
+            names = ', '.join(value for _, value in missing)
+            print(f"Not found: {names} - rediscovering (attempt {attempt + 1}/{attempts})", file=sys.stderr)
+            time.sleep(attempt)
+            self.rediscover()
+
+        return [(t, found[t]) for t in targets if t in found], missing
+
+    def get_state(self, light) -> tuple[int, tuple]:
+        """Read power level and color in a single request."""
+        color = light.get_color()
+        return light.power_level, color
 
     def set_power(self, light, on: bool, duration: int = 0):
         """Turn light on or off."""
@@ -123,9 +179,121 @@ class LifxClient:
         light.set_label(new_label)
 
 
+class TargetAction(argparse.Action):
+    """Collect --mac/--ip/--label values into args.targets, keeping command-line order."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        targets = list(getattr(namespace, 'targets', None) or [])
+        targets.append((self.dest, values))
+        namespace.targets = targets
+
+
+def light_name(light, target) -> str:
+    """Best name for output without another network request."""
+    return light.label or target[1]
+
+
+def product_features(light) -> dict:
+    """Product features (color support, kelvin range), or {} if unknown."""
+    try:
+        return light.get_product_features() or {}
+    except:
+        return {}
+
+
+def hsbk_mismatches(light, requested: tuple, actual: tuple) -> list[str]:
+    """Describe requested HSBK values the bulb does not report, within tolerance.
+
+    requested holds None for components that were not asked for.
+    """
+    h, s, b, k = requested
+    ah, as_, ab, ak = actual
+    features = product_features(light)
+    supports_color = features.get('color', True)
+    problems = []
+
+    # hue is meaningless on white-only bulbs or at zero saturation
+    if h is not None and supports_color and as_ > HSB_TOLERANCE:
+        distance = abs(h - ah) % 65536
+        if min(distance, 65536 - distance) > HSB_TOLERANCE:
+            problems.append(f"hue {ah} != {h}")
+
+    if s is not None and supports_color and abs(s - as_) > HSB_TOLERANCE:
+        problems.append(f"saturation {as_} != {s}")
+
+    if b is not None and abs(b - ab) > HSB_TOLERANCE:
+        problems.append(f"brightness {ab} != {b}")
+
+    if k is not None:
+        # bulbs may clamp kelvin to their supported range
+        clamped = min(max(k, features.get('min_kelvin', k)), features.get('max_kelvin', k))
+        if abs(k - ak) > KELVIN_TOLERANCE and abs(clamped - ak) > KELVIN_TOLERANCE:
+            problems.append(f"kelvin {ak} != {k}")
+
+    return problems
+
+
+def apply_all(found, apply, check, settle: float, attempts: int) -> set:
+    """Send a change to every light, and when check is given, read back and retry the misses.
+
+    apply(light) sends the command; check(light) reads the bulb and returns a list of problems.
+    Every light gets the command before the wait, so transitions run together rather than
+    one after another. Without check there is a single attempt and success means the bulb
+    acknowledged. Returns the targets that failed.
+    """
+    pending = list(found)
+
+    for attempt in range(1, attempts + 1):
+        problems = {}
+        sent = []
+
+        for target, light in pending:
+            try:
+                apply(light)
+                sent.append((target, light))
+            except Exception as e:
+                problems[target] = [str(e)]
+
+        if check is not None and sent:
+            time.sleep(settle)
+            for target, light in sent:
+                try:
+                    issues = check(light)
+                except Exception as e:
+                    issues = [str(e)]
+                if issues:
+                    problems[target] = issues
+
+        pending = [(t, l) for t, l in pending if t in problems]
+        for target, light in pending:
+            print(f"{light_name(light, target)}: attempt {attempt}/{attempts} failed: {'; '.join(problems[target])}", file=sys.stderr)
+
+        if check is None or not pending:
+            break
+        if attempt < attempts:
+            time.sleep(attempt)
+
+    return {t for t, _ in pending}
+
+
+def resolve_targets(client, args):
+    """Find the targeted lights, reporting any that are missing."""
+    if not args.targets:
+        print("Error: specify a light with --label, --mac, or --ip")
+        return None, True
+
+    attempts = args.attempts if args.verify else 1
+    found, missing = client.find_lights(args.targets, attempts=attempts)
+
+    for _, value in missing:
+        print(f"Light not found: {value}")
+
+    return found, bool(missing)
+
+
 def cmd_list(args):
     """List all LIFX lights on the network."""
-    client = LifxClient(args.num_lights)
+    client = LifxClient()
     lights = client.list_lights()
 
     if not lights:
@@ -172,82 +340,117 @@ def cmd_rename(args):
     return 0
 
 
-def cmd_on(args):
-    """Turn on a light."""
+def power_command(args, on: bool):
+    """Turn targeted lights on or off, optionally verifying the result."""
     client = LifxClient()
-    light = client.find_light(mac=args.mac, ip=args.ip, label=args.label)
-
-    if not light:
-        print(f"Light not found")
+    found, failed = resolve_targets(client, args)
+    if found is None:
         return 1
 
-    client.set_power(light, True, duration=args.duration)
-    label = light.get_label() if hasattr(light, 'get_label') else 'Light'
-    print(f"{label} turned on")
-    return 0
+    attempts = args.attempts if args.verify else 1
+    settle = args.duration / 1000 + SETTLE_SECONDS
+    state = 'on' if on else 'off'
+
+    def apply(light):
+        client.set_power(light, on, duration=args.duration)
+
+    def check(light):
+        power, _ = client.get_state(light)
+        return [] if (power > 0) == on else [f"power is {'on' if power > 0 else 'off'}"]
+
+    failures = apply_all(found, apply, check if args.verify else None, settle, attempts)
+
+    for target, light in found:
+        name = light_name(light, target)
+        if target in failures:
+            print(f"{name}: failed to turn {state}")
+            failed = True
+        else:
+            print(f"{name} turned {state}{' (verified)' if args.verify else ''}")
+
+    return 1 if failed else 0
+
+
+def cmd_on(args):
+    """Turn on a light."""
+    return power_command(args, True)
 
 
 def cmd_off(args):
     """Turn off a light."""
-    client = LifxClient()
-    light = client.find_light(mac=args.mac, ip=args.ip, label=args.label)
-
-    if not light:
-        print(f"Light not found")
-        return 1
-
-    client.set_power(light, False, duration=args.duration)
-    label = light.get_label() if hasattr(light, 'get_label') else 'Light'
-    print(f"{label} turned off")
-    return 0
+    return power_command(args, False)
 
 
 def cmd_set(args):
     """Set light color/brightness properties."""
-    client = LifxClient()
-    light = client.find_light(mac=args.mac, ip=args.ip, label=args.label)
-
-    if not light:
-        print(f"Light not found")
-        return 1
-
     # Must specify at least one color property
-    if not any(x is not None for x in [args.hue, args.saturation, args.brightness, args.kelvin]):
+    requested = (args.hue, args.saturation, args.brightness, args.kelvin)
+    if all(x is None for x in requested):
         print("Error: must specify at least one property to set (--hue, --saturation, --brightness, --kelvin)")
         return 1
 
-    light_label = light.get_label() if hasattr(light, 'get_label') else 'Light'
-    changes = []
-
-    try:
-        # Get current color
-        current = light.get_color()
-        h, s, b, k = current
-
-        # Override with provided values (raw LIFX values 0-65535)
-        if args.hue is not None:
-            h = args.hue
-            changes.append(f"hue={args.hue}")
-
-        if args.saturation is not None:
-            s = args.saturation
-            changes.append(f"saturation={args.saturation}")
-
-        if args.brightness is not None:
-            b = args.brightness
-            changes.append(f"brightness={args.brightness}")
-
-        if args.kelvin is not None:
-            k = args.kelvin
-            changes.append(f"kelvin={args.kelvin}")
-
-        client.set_color(light, h, s, b, k, duration=args.duration)
-    except Exception as e:
-        print(f"Failed to set color: {e}")
+    client = LifxClient()
+    found, failed = resolve_targets(client, args)
+    if found is None:
         return 1
 
-    print(f"{light_label}: {', '.join(changes)}")
-    return 0
+    attempts = args.attempts if args.verify else 1
+    settle = args.duration / 1000 + SETTLE_SECONDS
+    changes = [f"{name}={value}" for name, value in zip(('hue', 'saturation', 'brightness', 'kelvin'), requested) if value is not None]
+    if args.on:
+        changes.append("on")
+
+    def apply(light):
+        # Override current color with provided values (raw LIFX values 0-65535)
+        power, current = client.get_state(light)
+        h, s, b, k = (new if new is not None else cur for new, cur in zip(requested, current))
+
+        if args.on and power == 0:
+            # set the color while still off, then fade up straight into it
+            client.set_color(light, h, s, b, k, duration=0)
+            client.set_power(light, True, duration=args.duration)
+        else:
+            # never touches power - an off bulb keeps the color for its next power on
+            client.set_color(light, h, s, b, k, duration=args.duration)
+
+    def check(light):
+        power, actual = client.get_state(light)
+        problems = hsbk_mismatches(light, requested, actual)
+        if args.on and power == 0:
+            problems.append("power is off")
+        return problems
+
+    failures = apply_all(found, apply, check if args.verify else None, settle, attempts)
+
+    for target, light in found:
+        name = light_name(light, target)
+        if target in failures:
+            print(f"{name}: failed to set {', '.join(changes)}")
+            failed = True
+        else:
+            print(f"{name}: {', '.join(changes)}{' (verified)' if args.verify else ''}")
+
+    return 1 if failed else 0
+
+
+def positive_int(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
+def add_target_args(parser):
+    """Repeatable light selectors, collected in order into args.targets."""
+    parser.set_defaults(targets=[])
+    parser.add_argument('--mac', '-m', action=TargetAction, help='MAC address of light (repeatable)')
+    parser.add_argument('--ip', '-i', action=TargetAction, help='IP address of light (repeatable)')
+    parser.add_argument('--label', '-l', action=TargetAction, help='Label/name of light (repeatable)')
+
+
+def add_verify_args(parser):
+    parser.add_argument('--verify', action='store_true', help='Read state back after the change and retry until it matches')
+    parser.add_argument('--attempts', type=positive_int, default=3, help='Attempts for discovery and the change when verifying (default: 3)')
 
 
 def main():
@@ -256,8 +459,6 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=CLI_EPILOG
     )
-
-    parser.add_argument('--num-lights', '-n', type=int, help='Number of lights (speeds up discovery)')
 
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
 
@@ -274,31 +475,29 @@ def main():
     rename_parser.set_defaults(func=cmd_rename)
 
     # On command
-    on_parser = subparsers.add_parser('on', help='Turn on a light')
-    on_parser.add_argument('--mac', '-m', help='MAC address of light')
-    on_parser.add_argument('--ip', '-i', help='IP address of light')
-    on_parser.add_argument('--label', '-l', help='Label/name of light')
+    on_parser = subparsers.add_parser('on', help='Turn on lights')
+    add_target_args(on_parser)
     on_parser.add_argument('--duration', '-d', type=int, default=0, help='Transition duration in ms (default: 0)')
+    add_verify_args(on_parser)
     on_parser.set_defaults(func=cmd_on)
 
     # Off command
-    off_parser = subparsers.add_parser('off', help='Turn off a light')
-    off_parser.add_argument('--mac', '-m', help='MAC address of light')
-    off_parser.add_argument('--ip', '-i', help='IP address of light')
-    off_parser.add_argument('--label', '-l', help='Label/name of light')
+    off_parser = subparsers.add_parser('off', help='Turn off lights')
+    add_target_args(off_parser)
     off_parser.add_argument('--duration', '-d', type=int, default=0, help='Transition duration in ms (default: 0)')
+    add_verify_args(off_parser)
     off_parser.set_defaults(func=cmd_off)
 
     # Set command
     set_parser = subparsers.add_parser('set', help='Set light color/brightness (HSBK)')
-    set_parser.add_argument('--mac', '-m', help='MAC address of light')
-    set_parser.add_argument('--ip', '-i', help='IP address of light')
-    set_parser.add_argument('--label', '-l', help='Label/name of light')
+    add_target_args(set_parser)
     set_parser.add_argument('--hue', type=int, help='Hue (0-65535)')
     set_parser.add_argument('--saturation', '-s', type=int, help='Saturation (0-65535)')
     set_parser.add_argument('--brightness', '-b', type=int, help='Brightness (0-65535)')
     set_parser.add_argument('--kelvin', '-k', type=int, help='Kelvin (2500-9000)')
     set_parser.add_argument('--duration', '-d', type=int, default=0, help='Transition duration in ms (default: 0)')
+    set_parser.add_argument('--on', action='store_true', help='Turn the light on if it is off (default: never change power)')
+    add_verify_args(set_parser)
     set_parser.set_defaults(func=cmd_set)
 
     args = parser.parse_args()
