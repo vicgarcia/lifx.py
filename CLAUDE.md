@@ -65,6 +65,14 @@ Exit code is 1 if any target was not found or not verified; every failed attempt
 
 `--label` / `--mac` / `--ip` are repeatable and collected in command-line order by `TargetAction` into `args.targets` as `(kind, value)` tuples. `rename` keeps single, non-repeatable selectors.
 
+### Direct IP addressing
+
+Some bulbs ignore broadcasts much of the time — measured on real hardware: one bulb missed ~50% of discovery broadcasts (re-broadcasting or listening longer didn't help), and ~50% of MAC-addressed requests sent to the broadcast address, yet answered 20/20 unicast requests to its IP. Wi-Fi power save delivers broadcast/multicast frames poorly.
+
+So `--ip` targets skip discovery: `light_at_ip()` sends a unicast `GetService` (target `BROADCAST_MAC`) to the IP and builds a `Light` from the `StateService` reply's MAC. It must learn the MAC this way — lifxlan's `req_with_resp` only accepts replies whose `target_addr` matches the MAC it addressed, so `Light("00:00:00:00:00:00", ip)` never sees a reply. If nothing answers, the target falls back to discovery. `--mac` alone does not help: without an IP, lifxlan sends to the broadcast address.
+
+Scheduled jobs should use `--ip` with DHCP reservations on the router (an IP reassigned to another bulb would control the wrong bulb).
+
 ## Testing
 
 There is no test suite in the repo. Changes to discovery, `apply_all()`, or comparison logic should be exercised against fake `Light` objects (patch `LifxClient._get_lights` and `time.sleep`) and then on real bulbs — always record a bulb's `list` state first and restore it afterwards.

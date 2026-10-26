@@ -162,6 +162,7 @@ lifx.py set --label "Office" --label "Desk" --label "Hallway" --brightness 32768
 - Set `--duration` for smooth transitions instead of instant changes
 - For white light: set saturation to 0, control warmth with kelvin
 - Repeat `--label` to act on several lights with a single discovery
+- `--ip` addresses a light directly without discovery - the most reliable choice when a light keeps going missing from `list`
 - `set` without `--on` leaves power alone; add `--on` to light it up
 - Add `--verify` when the change must stick (scheduled jobs, flaky Wi-Fi)
 - The `--brightness` flag alone preserves current hue/saturation
