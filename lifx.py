@@ -9,8 +9,9 @@
 import sys
 import time
 import argparse
+from socket import socket, AF_INET, SOCK_DGRAM
 from typing import Optional
-from lifxlan import LifxLAN, Light, GetService, StateService
+from lifxlan import LifxLAN, Light, GetService, StateService, BROADCAST_MAC, unpack_lifx_message
 
 
 CLI_EPILOG = """
@@ -143,7 +144,8 @@ class LifxClient:
             for target in targets:
                 if target not in found:
                     kind, value = target
-                    light = self.find_light(**{kind: value})
+                    # an IP is addressed directly, falling back to discovery if it doesn't answer
+                    light = (self.light_at_ip(value) if kind == 'ip' else None) or self.find_light(**{kind: value})
                     if light:
                         found[target] = light
 
@@ -157,6 +159,30 @@ class LifxClient:
             self.rediscover()
 
         return [(t, found[t]) for t in targets if t in found], missing
+
+    def light_at_ip(self, ip: str, timeout: float = 1.0):
+        """Address a light directly by IP, without the discovery broadcast.
+
+        Bulbs in Wi-Fi power save can ignore broadcasts while answering unicast reliably.
+        A unicast GetService learns the light's MAC (lifxlan only accepts replies from the
+        MAC it addressed). Returns None if nothing answers.
+        """
+        sock = socket(AF_INET, SOCK_DGRAM)
+        sock.settimeout(timeout)
+        try:
+            msg = GetService(BROADCAST_MAC, self.lan.source_id, seq_num=0, response_requested=True)
+            sock.sendto(msg.packed_message, (ip, 56700))
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                data, (addr, _) = sock.recvfrom(1024)
+                response = unpack_lifx_message(data)
+                if type(response) == StateService and response.source_id == self.lan.source_id and addr == ip:
+                    return Light(response.target_addr, ip, response.service, response.port, self.lan.source_id)
+        except Exception:
+            pass
+        finally:
+            sock.close()
+        return None
 
     def get_state(self, light) -> tuple[int, tuple]:
         """Read power level and color in a single request."""

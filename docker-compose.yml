@@ -1,0 +1,15 @@
+services:
+
+  cron:
+    build: .
+    image: lifx-cron:local
+    restart: unless-stopped
+    # LIFX discovery is a UDP broadcast on the LAN - needs the host network (Linux hosts only)
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      # bind the repo directory (not the crontab file) so the schedule can be edited
+      # without rebuilding - a single-file bind pins the original inode, so edits that
+      # replace the file (sed -i, most editors) would never reach the container
+      - .:/lifx:ro

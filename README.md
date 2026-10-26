@@ -12,12 +12,14 @@ A simple CLI for controlling LIFX smart bulbs on your local network.
 - **Multiple lights per command** - Repeat `--label`/`--mac`/`--ip`; one discovery, transitions run together
 - **Verified changes** - `--verify` reads state back and retries until the bulbs report what was asked for
 - **Device management** - Rename lights directly from CLI
+- **Cron container** - Docker + [Supercronic](https://github.com/aptible/supercronic) for scheduled lighting
 
 ## Prerequisites
 
 - Python 3.10+
 - [uv](https://github.com/astral-sh/uv) package manager
 - LIFX bulbs on your local network
+- Docker and Docker Compose on a Linux host (scheduled lighting container)
 
 ## Installation
 
@@ -85,7 +87,7 @@ lifx.py off --label "Office" --verify --attempts 5
 
 `--verify` makes each change fault tolerant:
 
-- Lights missing from discovery are searched for again, up to `--attempts` times
+- Lights missing from discovery are searched for again, up to `--attempts` times (`--ip` targets are addressed directly first)
 - Every light gets the command first, then after the transition finishes each light's state is read back and compared to what was requested
   (within ~1% for hue/saturation/brightness; kelvin may be clamped to the bulb's supported range)
 - Only lights that don't match get the command again, up to `--attempts` times (default 3)
@@ -122,7 +124,7 @@ lifx.py set --label "Desk" --hue 43690 --saturation 65535 --brightness 52428 --k
 | Option | Description |
 |--------|-------------|
 | `--label`, `-l` | Light name (case-insensitive), repeatable |
-| `--ip`, `-i` | Light IP address, repeatable |
+| `--ip`, `-i` | Light IP address, repeatable - addressed directly, no discovery |
 | `--mac`, `-m` | Light MAC address, repeatable |
 | `--hue` | Hue (0-65535) |
 | `--saturation`, `-s` | Saturation (0-65535) |
@@ -169,6 +171,82 @@ For white light, set saturation to 0 and control warmth with kelvin (2500-3000 =
 | 25% | 16384 |
 | 10% | 6554 |
 | 1% | 655 |
+
+## Scheduled Lighting (Docker)
+
+The repo includes a cron container that runs `lifx.py` commands on a schedule via [Supercronic](https://github.com/aptible/supercronic).
+
+```
+Supercronic (cron) → lifx.py CLI → LIFX LAN protocol → Bulbs
+```
+
+The container installs `lifx.py` from the repo at build time (COPY, no downloads) and reads the crontab from the bind-mounted repo directory, so editing the schedule never requires a rebuild. Setup:
+
+```bash
+# 1. configure environment
+cp .env.example .env
+# edit .env: TZ
+
+# 2. define the schedule
+cp crontab.template crontab
+# edit crontab (examples included, all commented out) - it's gitignored
+# so you can freely edit it without committing your personal schedule
+
+# 3. build and run
+docker compose up -d --build
+```
+
+Supercronic runs with `-inotify`, so it watches `/lifx/crontab` and reloads automatically when the file changes - no restart needed after editing the schedule, with any editor.
+
+LIFX discovery is a UDP broadcast on the local network, so the container uses `network_mode: host`. That only reaches the LAN on a Linux host - Docker Desktop (macOS/Windows) runs containers in a VM and discovery finds no lights.
+
+### Writing the schedule
+
+- Crontab entries call `lifx.py` directly - no wrapper scripts
+- Address lights by `--ip` - it talks to the bulb directly instead of relying on the discovery broadcast, which bulbs in Wi-Fi power save often ignore (they still answer unicast reliably). Give bulbs fixed IPs (DHCP reservations) and keep a comment table of IP to light name in your crontab
+- Add `--verify` to every scheduled command so dropped packets and sleepy bulbs get retried, and failures show up in the logs with a non-zero exit
+- Use `set ... --on` for the job that lights things up, and plain `set` (no `--on`) for later changes, so a light someone turned off by hand stays off
+- Jobs on the same minute run in parallel - put lights that change together on one line, repeating `--label` for shared values and chaining different values with `;`
+
+```
+0 18 * * * lifx.py set --label "Office" --label "Desk" --saturation 0 --brightness 45875 --kelvin 3000 --duration 2000 --on --verify
+0 21 * * * lifx.py set --label "Office" --brightness 13107 --duration 2000 --verify; lifx.py set --label "Desk" --brightness 6554 --duration 2000 --verify
+0 7  * * * lifx.py off --label "Office" --label "Desk" --duration 1000 --verify
+```
+
+### Container Files
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Debian slim + uv + Supercronic + lifx.py (copied from repo) |
+| `docker-compose.yml` | Service definition, host network, binds the repo directory read-only at `/lifx` |
+| `crontab.template` | Template schedule, tracked in git |
+| `crontab` | Your schedule - edit times and tasks here (gitignored, copy from `crontab.template`) |
+| `.env` | `TZ` |
+
+### Managing the Container
+
+```bash
+# build + start
+docker compose up -d --build
+
+# view logs (supercronic logs every job run)
+docker compose logs -f
+
+# run a command manually inside the container
+docker compose exec cron lifx.py list
+
+# stop
+docker compose down
+```
+
+### Troubleshooting
+
+**"No LIFX lights found on network"**: the container can't reach the LAN broadcast - confirm `network_mode: host` and that the host is Linux (not Docker Desktop).
+
+**A job logs `attempt 1/3 failed` but finishes verified**: normal - a dropped packet or a bulb waking from Wi-Fi power save was retried.
+
+**A job exits non-zero with `Light not found`**: the bulb didn't answer three discoveries - usually powered off at the wall switch. Lights in the same command are still set.
 
 ## Agent Skill
 

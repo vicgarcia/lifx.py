@@ -1,0 +1,29 @@
+# LIFX Lighting Schedule
+# Supercronic logs all output to stdout/stderr automatically
+# Times run in the TZ configured in .env
+#
+# Crontab entries call lifx.py directly. Address lights by --ip: it talks to
+# the bulb directly instead of relying on discovery broadcasts, which some
+# bulbs ignore. Keep the table below mapping each IP to its light name.
+#
+# Jobs on the same minute run in parallel, so put lights that change together
+# on one line - repeat --ip for lights sharing values, and chain lights with
+# different values with `;`.
+#
+# Use --verify on scheduled jobs: it reads state back and retries until the
+# lights match (exit code non-zero if they don't).
+#
+# Lights (use fixed IPs - DHCP reservations on the router):
+#   192.168.1.10  Office
+#   192.168.1.11  Desk
+#
+# Examples (uncomment / edit to build the schedule):
+#
+# Evening: turn on (if off) and set warm white, fading in over 2s
+# 0 18 * * * lifx.py set --ip 192.168.1.10 --ip 192.168.1.11 --saturation 0 --brightness 45875 --kelvin 3000 --duration 2000 --on --verify
+#
+# Late night: dim without --on, so lights someone turned off stay off
+# 0 21 * * * lifx.py set --ip 192.168.1.10 --brightness 13107 --duration 2000 --verify; lifx.py set --ip 192.168.1.11 --brightness 6554 --duration 2000 --verify
+#
+# Morning: power off
+# 0 7 * * * lifx.py off --ip 192.168.1.10 --ip 192.168.1.11 --duration 1000 --verify
