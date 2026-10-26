@@ -180,7 +180,7 @@ The repo includes a cron container that runs `lifx.py` commands on a schedule vi
 Supercronic (cron) → lifx.py CLI → LIFX LAN protocol → Bulbs
 ```
 
-The container installs `lifx.py` from the repo at build time (COPY, no downloads) and reads the crontab from a bind-mounted file, so editing the schedule never requires a rebuild. Setup:
+The container installs `lifx.py` from the repo at build time (COPY, no downloads) and reads the crontab from the bind-mounted repo directory, so editing the schedule never requires a rebuild. Setup:
 
 ```bash
 # 1. configure environment
@@ -196,7 +196,7 @@ cp crontab.template crontab
 docker compose up -d --build
 ```
 
-Supercronic runs with `-inotify`, so it watches `/crontab` and reloads automatically when the file changes - no restart needed after editing the schedule.
+Supercronic runs with `-inotify`, so it watches `/lifx/crontab` and reloads automatically when the file changes - no restart needed after editing the schedule, with any editor.
 
 LIFX discovery is a UDP broadcast on the local network, so the container uses `network_mode: host`. That only reaches the LAN on a Linux host - Docker Desktop (macOS/Windows) runs containers in a VM and discovery finds no lights.
 
@@ -218,7 +218,7 @@ LIFX discovery is a UDP broadcast on the local network, so the container uses `n
 | File | Purpose |
 |------|---------|
 | `Dockerfile` | Debian slim + uv + Supercronic + lifx.py (copied from repo) |
-| `docker-compose.yml` | Service definition, host network, binds `./crontab:/crontab` |
+| `docker-compose.yml` | Service definition, host network, binds the repo directory read-only at `/lifx` |
 | `crontab.template` | Template schedule, tracked in git |
 | `crontab` | Your schedule - edit times and tasks here (gitignored, copy from `crontab.template`) |
 | `.env` | `TZ` |

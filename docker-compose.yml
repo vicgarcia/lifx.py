@@ -9,5 +9,7 @@ services:
     env_file:
       - .env
     volumes:
-      # bind the schedule so it can be edited without rebuilding the image
-      - ./crontab:/crontab:ro
+      # bind the repo directory (not the crontab file) so the schedule can be edited
+      # without rebuilding - a single-file bind pins the original inode, so edits that
+      # replace the file (sed -i, most editors) would never reach the container
+      - .:/lifx:ro

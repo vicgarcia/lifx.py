@@ -11,7 +11,8 @@ Supercronic (cron) → lifx.py CLI → LIFX LAN protocol → Bulbs
 ```
 
 - The Dockerfile COPYs `lifx.py` from the repo into `~/.local/bin` (no downloads) and pre-warms uv deps with `lifx.py --help`
-- The crontab is bind-mounted (`./crontab:/crontab:ro`), not COPYed into the image, so schedule edits don't require a rebuild. `crontab.template` is the tracked template; `crontab` (the working copy, gitignored so personal schedules never get committed) is created from it. `CMD` runs `supercronic -inotify /crontab` so the schedule reloads automatically on change — no restart needed either
+- The repo directory is bind-mounted read-only (`.:/lifx:ro`) and the crontab is read from it, not COPYed into the image, so schedule edits don't require a rebuild. `crontab.template` is the tracked template; `crontab` (the working copy, gitignored so personal schedules never get committed) is created from it. `CMD` runs `supercronic -inotify /lifx/crontab` so the schedule reloads automatically on change — no restart needed either
+- Mount the directory, never the crontab file itself: a single-file bind pins the inode at container start, and edits that replace the file (`sed -i`, most editors write a new file and rename it) never reach the container — verified on the deploy host. With a directory mount, supercronic reloads on every replace
 - `network_mode: host` is required — discovery is a UDP broadcast on the LAN. Only works on Linux hosts; Docker Desktop's VM never sees the LAN broadcast and `list` finds nothing
 - No entrypoint/uid remapping (unlike containers with writable bind mounts) — the only mount is the read-only crontab, so the image runs as its `app` user directly
 - Crontab entries call `lifx.py` directly — no wrapper scripts. Supercronic runs same-minute entries in parallel, so lights that change together go on one line
